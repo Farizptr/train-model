@@ -1,16 +1,17 @@
-# Langkah 1: Install necessary libraries (Roboflow and Ultralytics)  
-try:  
-    import ultralytics  
-    import roboflow  
-except ImportError:  
-    print("Installing required libraries...")  
-    import ultralytics  
-    import roboflow  
+# download_and_train.py  
+  
+# Langkah 1: Import necessary libraries  
+from roboflow import Roboflow  
+from ultralytics import YOLO  
+import os  
+  
+# Mengatur variabel lingkungan untuk menghindari fragmentasi  
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'  
   
 # Langkah 2: Download the dataset using the provided Roboflow code  
 def download_dataset(api_key, workspace, project_name, version_number, download_type):  
     try:  
-        rf = roboflow.Roboflow(api_key=api_key)  
+        rf = Roboflow(api_key=api_key)  
         project = rf.workspace(workspace).project(project_name)  
         version = project.version(version_number)  
         dataset = version.download(download_type)  
@@ -35,13 +36,11 @@ if dataset_location is None:
     exit(1)  
   
 # Langkah 3: Set up the YOLOv8 model configuration  
-from ultralytics import YOLO  
-  
-# Inisialisasi model YOLOv8x  
-model = YOLO('yolov8x.yaml')  # Anda juga bisa menggunakan 'yolov8x.pt' jika Anda memiliki model pre-trained  
+# Inisialisasi model YOLOv8s (lebih kecil dari YOLOv8x)  
+model = YOLO('yolov8s.yaml')  # Anda juga bisa menggunakan 'yolov8s.pt' jika Anda memiliki model pre-trained  
   
 # Langkah 4: Train the model using the downloaded dataset  
-def train_model(model, dataset_location, epochs=50, batch=16, imgsz=640, device='0', workers=4, optimizer='Adam', lr0=0.001, save_period=-1, save_dir='runs/train'):  
+def train_model(model, dataset_location, epochs=50, batch=8, imgsz=640, device='0', workers=4, optimizer='Adam', lr0=0.001, save_period=-1, save_dir='runs/train', accumulate=4, half=True):  
     try:  
         results = model.train(  
             data=f"{dataset_location}/data.yaml",  # Path ke file data.yaml  
@@ -53,7 +52,9 @@ def train_model(model, dataset_location, epochs=50, batch=16, imgsz=640, device=
             optimizer=optimizer,  # Optimizer yang digunakan  
             lr0=lr0,  # Learning rate awal  
             save_period=save_period,  # Simpan model setiap epoch  
-            save_dir=save_dir  # Direktori untuk menyimpan hasil pelatihan  
+            save_dir=save_dir,  # Direktori untuk menyimpan hasil pelatihan  
+            accumulate=accumulate,  # Gradient accumulation  
+            half=half  # Mixed precision training  
         )  
         print("Model training completed successfully.")  
         return results  
