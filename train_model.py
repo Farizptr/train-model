@@ -52,9 +52,7 @@ def train_model(model, dataset_location, epochs=50, batch=8, imgsz=640, device='
             optimizer=optimizer,  # Optimizer yang digunakan  
             lr0=lr0,  # Learning rate awal  
             save_period=save_period,  # Simpan model setiap epoch  
-            save_dir=save_dir,  # Direktori untuk menyimpan hasil pelatihan  
-            accumulate=accumulate,  # Gradient accumulation  
-            half=half  # Mixed precision training  
+            save_dir=save_dir # Mixed precision training  
         )  
         print("Model training completed successfully.")  
         return results  
