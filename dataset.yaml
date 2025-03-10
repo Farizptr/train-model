@@ -1,7 +1,8 @@
 path: ./dataset
 train: images/train
 val: images/val
-test: images/test
+test: images/val
 
 nc: 1
-names: ['building']
+names:
+  0: building

@@ -15,6 +15,12 @@ def main():
     # Create runs directory if it doesn't exist
     os.makedirs("runs", exist_ok=True)
     
+    # Get the absolute path to the current directory
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Create the absolute path to dataset.yaml
+    data_yaml_path = os.path.join(current_dir, "dataset.yaml")
+    
     # Model configuration
     model_size = "n"  # nano size (options: n, s, m, l, x)
     
@@ -23,7 +29,7 @@ def main():
     
     # Set training parameters
     params = {
-        "data": "dataset.yaml",  # Path to data config file
+        "data": data_yaml_path,  # Use absolute path to dataset.yaml
         "epochs": 100,           # Number of training epochs
         "imgsz": 640,            # Image size
         "batch": 16,             # Batch size
