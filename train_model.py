@@ -22,7 +22,7 @@ def main():
     data_yaml_path = os.path.join(current_dir, "dataset.yaml")
     
     # Model configuration
-    model_size = "x"  # Change from 'n' (nano) to 'x' (extra large) for highest accuracy
+    model_size = "l"  # Changed from 'x' to 'l' (large) to reduce memory requirements
     
     # Load a pre-trained YOLOv8 model
     model = YOLO(f"yolov8{model_size}.pt")
@@ -30,22 +30,22 @@ def main():
     # Set training parameters
     params = {
         "data": data_yaml_path,  # Use absolute path to dataset.yaml
-        "epochs": 300,           # Increased from 100 to 300 for better convergence
-        "imgsz": 1280,           # Increased from 640 to 1280 for better detail capture
-        "batch": 8,              # Reduced batch size to accommodate larger model and image size
+        "epochs": 300,           # Keep high epoch count for accuracy
+        "imgsz": 1024,           # Reduced from 1280 to 1024 to save memory
+        "batch": 4,              # Reduced batch size from 8 to 4 to save memory
         "device": device,        # Device to use (cuda or cpu)
         "workers": 4,            # Number of worker threads
-        "patience": 50,          # Increased from 20 to 50 to allow more training time before early stopping
+        "patience": 50,          # Keep high patience for better accuracy
         "project": "runs",       # Project directory
         "name": f"train_{timestamp}",  # Run name
         "exist_ok": True,        # Overwrite existing run
         "pretrained": True,      # Use pretrained weights
-        "optimizer": "AdamW",    # Changed from Adam to AdamW for better performance
-        "lr0": 0.001,            # Reduced initial learning rate for more stable training
-        "lrf": 0.001,            # Final learning rate (fraction of lr0)
+        "optimizer": "AdamW",    # Keep AdamW for better performance
+        "lr0": 0.001,            # Keep reduced initial learning rate
+        "lrf": 0.001,            # Final learning rate
         "momentum": 0.937,       # SGD momentum/Adam beta1
-        "weight_decay": 0.001,   # Increased from 0.0005 to 0.001 for better regularization
-        "warmup_epochs": 5.0,    # Increased from 3.0 to 5.0 for better initialization
+        "weight_decay": 0.001,   # Keep increased weight decay
+        "warmup_epochs": 5.0,    # Keep increased warmup epochs
         "warmup_momentum": 0.8,  # Warmup initial momentum
         "warmup_bias_lr": 0.1,   # Warmup initial bias lr
         "box": 7.5,              # Box loss gain
@@ -54,15 +54,18 @@ def main():
         "save": True,            # Save train checkpoints
         "save_period": 10,       # Save checkpoint every 10 epochs
         "plots": True,           # Save plots during train/val
-        "augment": True,         # Added data augmentation for better generalization
-        "cos_lr": True,          # Added cosine learning rate scheduler
-        "mixup": 0.1,            # Added mixup augmentation
-        "copy_paste": 0.1,       # Added copy-paste augmentation
-        "degrees": 0.5,          # Rotation augmentation
-        "translate": 0.1,        # Translation augmentation
-        "scale": 0.5,            # Scale augmentation
-        "fliplr": 0.5,           # Horizontal flip probability
-        "mosaic": 1.0,           # Mosaic augmentation
+        "augment": True,         # Keep data augmentation
+        "cos_lr": True,          # Keep cosine learning rate scheduler
+        "mixup": 0.1,            # Keep mixup augmentation
+        "copy_paste": 0.1,       # Keep copy-paste augmentation
+        "degrees": 0.5,          # Keep rotation augmentation
+        "translate": 0.1,        # Keep translation augmentation
+        "scale": 0.5,            # Keep scale augmentation
+        "fliplr": 0.5,           # Keep horizontal flip probability
+        "mosaic": 1.0,           # Keep mosaic augmentation
+        "cache": True,           # Add caching to improve memory efficiency
+        "torch_compile": False,  # Disable torch compile which can use extra memory
+        "cuda_alloc_conf": {"expandable_segments": True},  # Add CUDA memory allocation config
     }
     
     # Print training configuration
@@ -90,18 +93,23 @@ def main():
     print("\nExporting model...")
     model.export(format="onnx")  # Export to ONNX format
     
-    # Optionally perform model ensemble for even better accuracy
-    print("\nTraining ensemble models...")
-    ensemble_models = []
+    # Modified ensemble approach to avoid OOM errors
+    print("\nTraining ensemble models sequentially to avoid memory issues...")
+    ensemble_results = []
     
-    # Train 3 additional models with different seeds for ensemble
-    for i in range(3):
+    # Train additional models one at a time with different seeds
+    for i in range(2):  # Reduced from 3 to 2 models
+        print(f"\nTraining ensemble model {i+1}/2...")
         ensemble_model = YOLO(f"yolov8{model_size}.pt")
         params["seed"] = i + 42  # Different seed for each model
         params["name"] = f"ensemble_{i}_{timestamp}"
         ensemble_model.train(**params)
-        ensemble_models.append(ensemble_model)
+        # Save results and clear model from GPU memory
+        ensemble_results.append(params["name"])
+        del ensemble_model
+        torch.cuda.empty_cache()  # Clear GPU cache between models
     
+    print(f"\nEnsemble models trained and saved to: {', '.join(ensemble_results)}")
     print("\nTraining and validation complete!")
 
 if __name__ == "__main__":
