@@ -6,6 +6,7 @@ from datetime import datetime
 import yaml
 import random
 import numpy as np
+import gc
 
 def seed_everything(seed=42):
     """Set seeds for reproducibility"""
@@ -19,12 +20,28 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 
 def main():
+    # Clear CUDA cache before starting
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    # Set environment variable for memory allocation
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
     # Set seed for reproducibility
     seed_everything(42)
     
     # Check for GPU availability and use all available GPUs
-    device = "0,1,2,3" if torch.cuda.device_count() > 1 else "0" if torch.cuda.is_available() else "cpu"
+    device = "0" if torch.cuda.is_available() else "cpu"  # Use only one GPU to avoid memory issues
     print(f"Using device: {device}")
+    
+    # Get GPU memory info
+    if torch.cuda.is_available():
+        total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        reserved_mem = torch.cuda.memory_reserved(0) / 1024**3
+        allocated_mem = torch.cuda.memory_allocated(0) / 1024**3
+        free_mem = total_mem - allocated_mem
+        print(f"GPU Memory: Total={total_mem:.2f}GB, Reserved={reserved_mem:.2f}GB, Allocated={allocated_mem:.2f}GB, Free={free_mem:.2f}GB")
     
     # Create a timestamp for the run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -38,8 +55,8 @@ def main():
     # Create the absolute path to dataset.yaml
     data_yaml_path = os.path.join(current_dir, "dataset.yaml")
     
-    # Model configuration - using the largest, most accurate model
-    model_size = "x"  # Use the largest model for best accuracy
+    # Model configuration - using a smaller model to avoid OOM
+    model_size = "l"  # Changed from "x" to "l" to reduce memory usage
     
     # Load a pre-trained YOLOv8 model (or checkpoint if resuming)
     checkpoint_path = os.path.join(current_dir, "runs", "train_latest", "weights", "best.pt")
@@ -91,14 +108,14 @@ def main():
     except Exception as e:
         print(f"Warning: Could not modify dataset.yaml for augmentations: {e}")
     
-    # Set training parameters optimized for accuracy
+    # Set training parameters optimized for accuracy but with memory constraints
     params = {
         "data": data_yaml_path,      # Dataset configuration
         "epochs": 500,               # Extended number of epochs for convergence
-        "imgsz": 1280,               # Larger image size for better accuracy
-        "batch": 8,                  # Reduced batch size to accommodate larger model
+        "imgsz": 1024,               # Reduced from 1280 to 1024 to save memory
+        "batch": 4,                  # Reduced from 8 to 4 to save memory
         "device": device,            # Device to use
-        "workers": 8,                # More worker threads
+        "workers": 4,                # Reduced from 8 to 4 workers
         "patience": 50,              # Increased patience for early stopping
         "project": "runs",           # Project directory
         "name": run_name,            # Run name
@@ -120,18 +137,18 @@ def main():
         "cos_lr": True,              # Use cosine learning rate scheduler
         "close_mosaic": 15,          # Disable mosaic in final epochs
         "freeze": [0, 1, 2],         # Freeze early layers initially
-        "amp": True,                 # Use mixed precision training
+        "amp": True,                 # Use mixed precision training to save memory
         "save": True,                # Save checkpoints
         "save_period": 10,           # Save checkpoint every 10 epochs
         "plots": True,               # Generate plots
         "rect": True,                # Use rectangular training
         "overlap_mask": True,        # Compute mask overlap metrics
         "nbs": 64,                   # Nominal batch size for scaling other parameters
-        "cache": True,               # Cache images for faster training
+        "cache": "disk",             # Cache images on disk instead of RAM
         # EMA settings
         "fraction": 0.9,             # EMA fraction
-        "profile": True,             # Profile the training process
-        "multi_scale": True,         # Use multi-scale training
+        "profile": False,            # Disable profiling to save memory
+        "multi_scale": False,        # Disable multi-scale training to save memory
         # Validation settings
         "val": True,                 # Run validation
         "conf": 0.001,               # Low confidence threshold for validation
@@ -152,19 +169,25 @@ def main():
     print("\nStarting training...")
     results = model.train(**params)
     
-    # Print training results
-    print("\nTraining completed!")
-    print(f"Results saved to {os.path.join(params['project'], params['name'])}")
+    # Clear memory before validation
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
     
-    # Test with different IoU and confidence thresholds to find the optimal settings
+    # Test with fewer threshold combinations to save memory
     print("\nValidating model with different thresholds...")
     best_map = 0
     best_conf = 0.25
     best_iou = 0.7
     
-    # Grid search for optimal confidence and IoU thresholds
-    for conf in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]:
-        for iou in [0.5, 0.55, 0.6, 0.65, 0.7, 0.75]:
+    # Reduced grid search for optimal confidence and IoU thresholds
+    for conf in [0.1, 0.2, 0.3]:
+        for iou in [0.5, 0.65, 0.75]:
+            # Clear cache before each validation run
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+                
             val_results = model.val(conf=conf, iou=iou)
             current_map = val_results.box.map    # Get mAP value
             print(f"Conf: {conf}, IoU: {iou}, mAP: {current_map:.4f}")
@@ -176,18 +199,24 @@ def main():
     
     print(f"\nBest thresholds - Conf: {best_conf}, IoU: {best_iou}, mAP: {best_map:.4f}")
     
-    # Fine-tune with the best thresholds
+    # Fine-tune with the best thresholds but with reduced memory usage
     print("\nFine-tuning model with best thresholds...")
     fine_tune_params = params.copy()
     fine_tune_params.update({
-        "epochs": 50,
+        "epochs": 30,                # Reduced from 50 to 30
         "lr0": 0.0001,
         "conf": best_conf,
         "iou": best_iou,
-        "freeze": [],  # Unfreeze all layers
+        "freeze": [],                # Unfreeze all layers
         "name": f"{run_name}_finetune",
+        "batch": 2,                  # Further reduce batch size for fine-tuning
     })
     
+    # Clear memory before fine-tuning
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+        
     fine_tune_results = model.train(**fine_tune_params)
     
     # Export the model to different formats with optimal settings
