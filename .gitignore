@@ -1,2 +1,12 @@
 venv/
 .DS_Store  
+dataset/
+yolov8n.pt
+*.pt
+*.yaml
+*.json
+*.csv
+*.png
+*.jpg
+*.jpeg
+runs/
