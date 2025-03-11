@@ -31,8 +31,8 @@ def main():
     # Set seed for reproducibility
     seed_everything(42)
     
-    # Check for GPU availability and use all available GPUs
-    device = "0" if torch.cuda.is_available() else "cpu"  # Use only one GPU to avoid memory issues
+    # Check for GPU availability and use only one GPU
+    device = "0" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     
     # Get GPU memory info
@@ -55,8 +55,8 @@ def main():
     # Create the absolute path to dataset.yaml
     data_yaml_path = os.path.join(current_dir, "dataset.yaml")
     
-    # Model configuration - using a smaller model to avoid OOM
-    model_size = "l"  # Changed from "x" to "l" to reduce memory usage
+    # Model configuration - using the largest model that fits in memory
+    model_size = "x"  # Try to use the largest model for best accuracy
     
     # Load a pre-trained YOLOv8 model (or checkpoint if resuming)
     checkpoint_path = os.path.join(current_dir, "runs", "train_latest", "weights", "best.pt")
@@ -64,8 +64,17 @@ def main():
         print(f"Loading from checkpoint: {checkpoint_path}")
         model = YOLO(checkpoint_path)
     else:
-        # Load pretrained model from COCO
-        model = YOLO(f"yolov8{model_size}.pt")
+        try:
+            # Try to load the largest model first
+            model = YOLO(f"yolov8{model_size}.pt")
+            print(f"Successfully loaded YOLOv8{model_size} model")
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                # If OOM, try a smaller model
+                print(f"Not enough GPU memory for YOLOv8{model_size}, trying YOLOv8l instead")
+                model_size = "l"
+                model = YOLO(f"yolov8{model_size}.pt")
+                print(f"Successfully loaded YOLOv8{model_size} model")
     
     # Set up run directory
     run_name = f"train_{timestamp}"
@@ -108,14 +117,14 @@ def main():
     except Exception as e:
         print(f"Warning: Could not modify dataset.yaml for augmentations: {e}")
     
-    # Set training parameters optimized for accuracy but with memory constraints
+    # Set training parameters optimized for accuracy with memory management
     params = {
         "data": data_yaml_path,      # Dataset configuration
         "epochs": 500,               # Extended number of epochs for convergence
-        "imgsz": 1024,               # Reduced from 1280 to 1024 to save memory
-        "batch": 4,                  # Reduced from 8 to 4 to save memory
+        "imgsz": 1280,               # Larger image size for better accuracy
+        "batch": 2,                  # Small batch size to avoid OOM
         "device": device,            # Device to use
-        "workers": 4,                # Reduced from 8 to 4 workers
+        "workers": 4,                # Worker threads
         "patience": 50,              # Increased patience for early stopping
         "project": "runs",           # Project directory
         "name": run_name,            # Run name
@@ -167,27 +176,42 @@ def main():
     
     # Start training
     print("\nStarting training...")
-    results = model.train(**params)
+    try:
+        results = model.train(**params)
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print("CUDA out of memory during training. Reducing image size and batch size...")
+            # Clear cache and try again with reduced parameters
+            torch.cuda.empty_cache()
+            gc.collect()
+            params["imgsz"] = 1024  # Reduce image size
+            params["batch"] = 1     # Minimum batch size
+            print(f"Retrying with image size={params['imgsz']}, batch size={params['batch']}")
+            results = model.train(**params)
+        else:
+            raise e
     
     # Clear memory before validation
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         gc.collect()
     
-    # Test with fewer threshold combinations to save memory
+    # Simplified validation with fewer threshold combinations
     print("\nValidating model with different thresholds...")
     best_map = 0
     best_conf = 0.25
     best_iou = 0.7
     
-    # Reduced grid search for optimal confidence and IoU thresholds
-    for conf in [0.1, 0.2, 0.3]:
-        for iou in [0.5, 0.65, 0.75]:
-            # Clear cache before each validation run
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                gc.collect()
-                
+    # Test only a few key threshold combinations
+    threshold_pairs = [(0.1, 0.5), (0.2, 0.6), (0.3, 0.7)]
+    
+    for conf, iou in threshold_pairs:
+        # Clear cache before each validation run
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+        try:
             val_results = model.val(conf=conf, iou=iou)
             current_map = val_results.box.map    # Get mAP value
             print(f"Conf: {conf}, IoU: {iou}, mAP: {current_map:.4f}")
@@ -196,31 +220,49 @@ def main():
                 best_map = current_map
                 best_conf = conf
                 best_iou = iou
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                print(f"CUDA out of memory during validation with conf={conf}, iou={iou}. Skipping...")
+                torch.cuda.empty_cache()
+                gc.collect()
+            else:
+                raise e
     
     print(f"\nBest thresholds - Conf: {best_conf}, IoU: {best_iou}, mAP: {best_map:.4f}")
     
-    # Fine-tune with the best thresholds but with reduced memory usage
+    # Fine-tune with the best thresholds
     print("\nFine-tuning model with best thresholds...")
     fine_tune_params = params.copy()
     fine_tune_params.update({
-        "epochs": 30,                # Reduced from 50 to 30
-        "lr0": 0.0001,
+        "epochs": 30,                # Reduced number of epochs for fine-tuning
+        "lr0": 0.0001,               # Lower learning rate for fine-tuning
         "conf": best_conf,
         "iou": best_iou,
         "freeze": [],                # Unfreeze all layers
         "name": f"{run_name}_finetune",
-        "batch": 2,                  # Further reduce batch size for fine-tuning
+        "batch": 1,                  # Minimum batch size to avoid OOM
     })
     
     # Clear memory before fine-tuning
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         gc.collect()
-        
-    fine_tune_results = model.train(**fine_tune_params)
+    
+    try:    
+        fine_tune_results = model.train(**fine_tune_params)
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print("CUDA out of memory during fine-tuning. Skipping fine-tuning step.")
+        else:
+            raise e
     
     # Export the model to different formats with optimal settings
     print("\nExporting model...")
+    # Clear memory before export
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+        
     export_params = {
         "format": "onnx",
         "imgsz": params["imgsz"],
@@ -229,16 +271,30 @@ def main():
         "optimize": True,
         "int8": False,  # Keep full precision for accuracy
     }
-    model.export(**export_params)
     
-    # Also export to other formats
-    for format_type in ["torchscript", "openvino"]:
-        try:
-            export_params["format"] = format_type
+    try:
+        model.export(**export_params)
+        
+        # Export to other formats one at a time
+        for format_type in ["torchscript", "openvino"]:
+            try:
+                # Clear memory before each export
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    
+                export_params["format"] = format_type
+                model.export(**export_params)
+                print(f"Exported to {format_type}")
+            except Exception as e:
+                print(f"Failed to export to {format_type}: {e}")
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print("CUDA out of memory during export. Trying with smaller image size...")
+            export_params["imgsz"] = 640  # Reduce export image size
             model.export(**export_params)
-            print(f"Exported to {format_type}")
-        except Exception as e:
-            print(f"Failed to export to {format_type}: {e}")
+        else:
+            raise e
     
     # Save the optimal configuration for inference
     optimal_config = {
